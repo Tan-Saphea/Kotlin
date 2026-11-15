@@ -1,0 +1,135 @@
+// LESSON 12 — COROUTINES & FLOW (Advanced)
+// ----------------------------------------
+// This file is saved as .kt.txt because coroutines need an extra library; without it,
+// the whole project would fail to compile. To use it:
+//
+//   1. Convert the project to Gradle (or Maven) and add:
+//        dependencies { implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0") }
+//      (Or in IntelliJ: File > Project Structure > Libraries > + > From Maven >
+//       org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0)
+//   2. Rename this file to Lesson12_Coroutines.kt (remove .txt) and run main().
+//
+// Topics: suspend functions, launch/async, structured concurrency, dispatchers,
+//         cancellation, exceptions, Flow, Channels (intro).
+
+package basic.lesson12
+
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+/*
+ * WHAT IS A COROUTINE?
+ * A lightweight "thread-like" unit of work that can SUSPEND (pause without blocking
+ * a thread) and RESUME later. You can run 100,000 coroutines easily; 100,000 threads
+ * would crash. They let you write asynchronous code in plain sequential style.
+ */
+
+// `suspend` marks a function that can pause. It may only be called from another
+// suspend function or from inside a coroutine.
+suspend fun fetchUser(): String {
+    delay(1000)               // non-blocking sleep (Thread.sleep would block the thread)
+    return "Ada"
+}
+
+suspend fun fetchOrders(): List<String> {
+    delay(1000)
+    return listOf("book", "pen")
+}
+
+// A Flow produces MANY values over time, asynchronously.
+fun ticker(): Flow<Int> = flow {
+    for (i in 1..3) {
+        delay(300)
+        emit(i)               // send a value downstream
+    }
+}
+
+// runBlocking bridges normal code and coroutines: blocks until the body completes.
+fun main() = runBlocking {
+
+    // ---------- 1. launch: fire-and-forget (returns a Job) ----------
+    val job = launch {
+        delay(500)
+        println("launch finished")
+    }
+    println("main continues immediately")
+    job.join()                 // wait for it
+
+    // ---------- 2. async/await: run in parallel and get a result ----------
+    val start = System.currentTimeMillis()
+    val user = async { fetchUser() }       // starts now
+    val orders = async { fetchOrders() }   // starts now, in parallel
+    println("${user.await()} ordered ${orders.await()}")
+    println("took ~${System.currentTimeMillis() - start}ms")   // ~1000, not 2000
+
+    // ---------- 3. Structured concurrency ----------
+    // coroutineScope waits for all children; if one fails, the others are cancelled.
+    coroutineScope {
+        launch { delay(200); println("child A") }
+        launch { delay(100); println("child B") }
+    }
+    println("both children done")
+
+    // ---------- 4. Dispatchers: which thread(s) run the coroutine ----------
+    //  Dispatchers.Default — CPU-heavy work
+    //  Dispatchers.IO      — blocking I/O (files, network)
+    //  Dispatchers.Main    — UI thread (Android/desktop)
+    withContext(Dispatchers.IO) {
+        println("Running on ${Thread.currentThread().name}")
+    }
+
+    // ---------- 5. Cancellation (cooperative) ----------
+    val worker = launch {
+        try {
+            repeat(10) { i ->
+                println("working $i")
+                delay(200)               // suspension points check for cancellation
+            }
+        } finally {
+            println("cleanup")
+        }
+    }
+    delay(500)
+    worker.cancelAndJoin()
+
+    // Timeout
+    val result = withTimeoutOrNull(300) {
+        delay(1000)
+        "slow"
+    }
+    println(result)                       // null
+
+    // ---------- 6. Exceptions ----------
+    try {
+        coroutineScope {
+            launch { throw IllegalStateException("boom") }
+        }
+    } catch (e: IllegalStateException) {
+        println("caught ${e.message}")
+    }
+    // supervisorScope: one child failing does NOT cancel siblings.
+
+    // ---------- 7. Flow ----------
+    ticker()
+        .map { it * 10 }
+        .filter { it > 10 }
+        .collect { println("flow value $it") }
+
+    // StateFlow: always holds a current value (great for UI state)
+    val state = MutableStateFlow(0)
+    state.value = 5
+    println(state.value)
+
+    // ---------- 8. Channels: send values between coroutines ----------
+    val channel = kotlinx.coroutines.channels.Channel<Int>()
+    launch {
+        for (x in 1..3) channel.send(x * x)
+        channel.close()
+    }
+    for (y in channel) println("received $y")
+
+    // ---------- EXERCISES ----------
+    // 1. Fetch 5 things in parallel with async and sum the results.
+    // 2. Write a Flow that emits the Fibonacci numbers, and collect the first 10 with take(10).
+    // 3. Why is Thread.sleep() inside a coroutine a bad idea? (Hint: it blocks the thread.)
+}
